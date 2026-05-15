@@ -16,7 +16,7 @@ not applicable to the current contents of this repository.**
 
 Tracked files in the repo (verified via `git ls-files`):
 
-```
+```text
 .github/workflows/pr-validation.yml
 .github/workflows/repo-health.yml
 .github/workflows/reuse.yml
