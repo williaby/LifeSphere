@@ -14,7 +14,9 @@ security audit covering credential loading, route-handler authn/authz, database
 query parameterization, and external API integration. **Those checks are
 not applicable to the current contents of this repository.**
 
-Tracked files in the repo (verified via `git ls-files`):
+Tracked files in the repo at the start of this review (pre-PR snapshot of
+`main`, verified via `git ls-files` against `a12ca13`; this PR additionally
+introduces `SECURITY-FINDINGS.md`):
 
 ```text
 .github/workflows/pr-validation.yml
@@ -117,8 +119,8 @@ on org settings) and no `harden-runner` step.
 **After:**
 
 - Added top-level `permissions: {}` (deny-by-default).
-- Added per-job `permissions: contents: read` (minimum needed; the job only
-  runs `echo`, but explicit beats implicit).
+- Added per-job `permissions: {}` — the job only runs `harden-runner` and
+  `echo`, with no checkout or API call, so no token scope is required.
 - Added `step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1`
   with `egress-policy: audit`, matching the version already used in
   `reuse.yml`.
