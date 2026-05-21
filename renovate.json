@@ -25,28 +25,55 @@
   "packageRules": [
     {
       "description": "Auto-merge GitHub Actions minor/patch updates",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash"
     },
     {
       "description": "Group GitHub Actions updates",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "GitHub Actions",
       "commitMessageTopic": "GitHub Actions"
     },
     {
       "description": "Pin GitHub Actions to commit SHA",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "pinDigests": true
     },
     {
       "description": "Python version updates - manual review required",
-      "matchDepTypes": ["python"],
+      "matchDepTypes": [
+        "python"
+      ],
       "enabled": false,
-      "labels": ["dependencies", "python-version", "breaking-change"]
+      "labels": [
+        "dependencies",
+        "python-version",
+        "breaking-change"
+      ]
+    },
+    {
+      "description": "Track org workflow floating v1 tag for SHA pin updates",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackagePatterns": [
+        "ByronWilliamsCPA/.github",
+        "williaby/.github"
+      ],
+      "versioning": "semver",
+      "followTag": "v1"
     }
   ],
   "enabledManagers": [
@@ -63,9 +90,15 @@
   "rangeStrategy": "bump",
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"],
-    "assignees": ["ByronWilliamsCPA"],
-    "reviewers": ["ByronWilliamsCPA"]
+    "labels": [
+      "security"
+    ],
+    "assignees": [
+      "ByronWilliamsCPA"
+    ],
+    "reviewers": [
+      "ByronWilliamsCPA"
+    ]
   },
   "osvVulnerabilityAlerts": true,
   "transitiveRemediation": true
