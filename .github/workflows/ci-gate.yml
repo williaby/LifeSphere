@@ -1,14 +1,136 @@
+# CI Gate
+# LifeSphere currently ships no application source, so "CI" here means the
+# things this repository actually has: GitHub Actions workflow definitions and
+# Markdown documentation. Both are linted for real; the CI Gate job below is a
+# pure aggregator whose only purpose is to emit the bare `CI Gate` status
+# context that branch protection requires.
+#
+# #CRITICAL: CI Gate is a required status check. If the worker jobs below are
+# ever removed or renamed, this gate silently degrades into an unconditional
+# pass, which is worse than having no gate at all because it still reads as
+# enforced. #VERIFY: any edit to this file must keep `needs` covering every
+# worker job, and must keep the failure branch reachable.
 name: CI Gate
+
 on:
   pull_request:
   push:
     branches: [main]
-permissions:
-  contents: read
+
+permissions: {}
+
+concurrency:
+  group: ci-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: '1.7.7'
+      # SHELLCHECK_OPTS is read by shellcheck however it is invoked, including
+      # from inside actionlint's integration, and overrides wrapper flags.
+      SHELLCHECK_OPTS: '--severity=warning'
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install actionlint
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            -o /tmp/actionlint.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tar.gz" | sha256sum --check
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: Run actionlint on .github/workflows/
+        run: actionlint -color .github/workflows/*.yml
+
+  docs-lint:
+    name: Documentation Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Reject em-dash characters
+        run: |
+          # Org writing standard: no em-dash in any tracked text file.
+          if git grep -n -I -P '\x{2014}' -- '*.md' '*.yml' '*.yaml' '*.toml' '*.json'; then
+            echo "::error::Em-dash characters found. Replace with a comma, semicolon, or colon."
+            exit 1
+          fi
+          echo "No em-dash characters found."
+
+      - name: Check Markdown files are non-empty and end with a newline
+        run: |
+          status=0
+          while IFS= read -r f; do
+            if [ ! -s "$f" ]; then
+              echo "::error file=$f::Markdown file is empty."
+              status=1
+              continue
+            fi
+            if [ -n "$(tail -c 1 "$f")" ]; then
+              echo "::error file=$f::Markdown file does not end with a newline."
+              status=1
+            fi
+          done < <(git ls-files '*.md')
+          exit "$status"
+
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [workflow-lint, docs-lint]
+    if: always()
+    permissions: {}
     steps:
-      - name: Placeholder
-        run: echo "stub"
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Check CI results
+        env:
+          WORKFLOW_LINT_RESULT: ${{ needs.workflow-lint.result }}
+          DOCS_LINT_RESULT: ${{ needs.docs-lint.result }}
+        run: |
+          {
+            echo "## CI Gate"
+            echo ""
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Workflow Lint | $WORKFLOW_LINT_RESULT |"
+            echo "| Documentation Lint | $DOCS_LINT_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for result in "$WORKFLOW_LINT_RESULT" "$DOCS_LINT_RESULT"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::CI Gate failed: one or more CI checks did not succeed."
+            exit 1
+          fi
+          echo "CI Gate passed."

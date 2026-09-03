@@ -1,14 +1,184 @@
+# Dependency and Standards Validation
+# Verifies that dependency manifests are well formed and that the OpenSSF
+# baseline files this org requires are actually present. LifeSphere ships no
+# package manifests today, so the manifest job asserts the invariant that any
+# manifest which does appear arrives with a matching lockfile, and the
+# standards job asserts the baseline file set directly.
+#
+# #CRITICAL: `Dependency & Standards Validation` is a required status check.
+# The gate job below is a pure aggregator over `needs`; it must never be
+# reduced to an unconditional pass, because a required check that always
+# succeeds reads as enforcement while providing none.
+# #VERIFY: any edit here must keep `needs` covering every worker job and keep
+# the non-zero exit path reachable.
 name: Dependency and Standards Validation
+
 on:
   pull_request:
   push:
     branches: [main]
-permissions:
-  contents: read
+
+permissions: {}
+
+concurrency:
+  group: dep-standards-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  dep-standards:
+  dependency-manifests:
+    name: Dependency Manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      # Every step below is hermetic: no network access beyond the checkout.
+      # A required status check that depends on a third-party registry can fail
+      # for reasons unrelated to the change under review, which blocks every
+      # open PR at once. Schema-level Renovate validation belongs in pre-commit.
+      - name: Validate JSON configuration files
+        run: |
+          status=0
+          while IFS= read -r f; do
+            if ! python3 -m json.tool "$f" > /dev/null; then
+              echo "::error file=$f::File is not valid JSON."
+              status=1
+            fi
+          done < <(git ls-files '*.json')
+          exit "$status"
+
+      - name: Require a lockfile beside every dependency manifest
+        run: |
+          # #ASSUME: LifeSphere has no package manifests today. When one is
+          # added, an unlocked manifest means unpinned transitive dependencies
+          # and a non-reproducible install.
+          # #VERIFY: add the matching lockfile in the same commit as the
+          # manifest; this step fails the PR until you do.
+          status=0
+          check_pair() {
+            manifest="$1"
+            shift
+            if [ ! -f "$manifest" ]; then
+              return 0
+            fi
+            for lock in "$@"; do
+              if [ -f "$lock" ]; then
+                echo "Found $manifest with lockfile $lock."
+                return 0
+              fi
+            done
+            echo "::error file=$manifest::Dependency manifest has no lockfile (expected one of: $*)."
+            return 1
+          }
+          check_pair pyproject.toml uv.lock poetry.lock || status=1
+          check_pair requirements.txt requirements.lock requirements.txt.lock || status=1
+          check_pair package.json package-lock.json pnpm-lock.yaml yarn.lock || status=1
+          exit "$status"
+
+  repository-standards:
+    name: Repository Standards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Check required governance files are present
+        run: |
+          # OpenSSF baseline. SECURITY.md, CONTRIBUTING.md and CODE_OF_CONDUCT.md
+          # may be inherited from the org-level ByronWilliamsCPA/.github repo, so
+          # only the files that must live here are enforced.
+          status=0
+          for f in CODE_OF_CONDUCT.md GOVERNANCE.md REUSE.toml renovate.json LICENSES/MIT.txt; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Required file is missing: $f"
+              status=1
+            fi
+          done
+          exit "$status"
+
+      - name: Check every workflow pins its actions to a full commit SHA
+        run: |
+          # #CRITICAL: a floating tag or branch ref in `uses:` lets an upstream
+          # force-push execute arbitrary code with this repo's token.
+          # #VERIFY: every third-party `uses:` must be a 40-character SHA with a
+          # trailing version comment so Renovate can still update it.
+          status=0
+          seen=0
+          # git grep -n emits "<path>:<lineno>:<content>". Local actions
+          # (./.github/actions/...) are excluded by the [^./] class because they
+          # carry no upstream ref to pin.
+          while IFS= read -r line; do
+            file="${line%%:*}"
+            rest="${line#*:}"
+            lineno="${rest%%:*}"
+            content="${rest#*:}"
+            seen=$((seen + 1))
+            ref="${content##*@}"
+            ref="${ref%%[[:space:]]*}"
+            if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
+              echo "::error file=$file,line=$lineno::Action reference is not pinned to a full commit SHA: $content"
+              status=1
+            fi
+          done < <(git grep -n -E '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./[:space:]]' -- '.github/workflows/*.yml')
+          if [ "$seen" -eq 0 ]; then
+            echo "::error::No action references were found. The pin check is not actually scanning anything."
+            exit 1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "All $seen action references are pinned to a commit SHA."
+          fi
+          exit "$status"
+
+  dep-standards-gate:
     name: Dependency & Standards Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [dependency-manifests, repository-standards]
+    if: always()
+    permissions: {}
     steps:
-      - name: Placeholder
-        run: echo "stub"
+      - name: Harden the runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Check dependency and standards results
+        env:
+          MANIFEST_RESULT: ${{ needs.dependency-manifests.result }}
+          STANDARDS_RESULT: ${{ needs.repository-standards.result }}
+        run: |
+          {
+            echo "## Dependency & Standards Validation"
+            echo ""
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Dependency Manifests | $MANIFEST_RESULT |"
+            echo "| Repository Standards | $STANDARDS_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for result in "$MANIFEST_RESULT" "$STANDARDS_RESULT"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Dependency & Standards Validation failed: one or more checks did not succeed."
+            exit 1
+          fi
+          echo "Dependency & Standards Validation passed."
